@@ -1,4 +1,5 @@
 use futures::{stream, Stream, TryStream};
+use reqwest::header::{HeaderMap, RANGE};
 use reqwest::StatusCode;
 
 use crate::{
@@ -343,6 +344,54 @@ impl<'a> ObjectClient<'a> {
             .map(|chunk| chunk.map(|c| futures::stream::iter(c.into_iter().map(Ok))))
             .try_flatten();
         Ok(SizedByteStream::new(bytes, size))
+    }
+
+    /// Obtains a specified byte range from start_offset to end_offset single object
+    /// with the specified name in the specified bucket.
+    /// ### Example
+    /// ```no_run
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use cloud_storage::Client;
+    /// use cloud_storage::Object;
+    ///
+    /// let client = Client::default();
+    /// let bytes = client.object().download_chunk("my_bucket", "path/to/my/file.png", 10, 20).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn download_chunk(
+        &self,
+        bucket: &str,
+        file_name: &str,
+        start_offset: u64,
+        end_offset: u64
+    ) -> crate::Result<Vec<u8>> {
+        let url = format!(
+            "{}/b/{}/o/{}?alt=media",
+            crate::BASE_URL,
+            percent_encode(bucket),
+            percent_encode(file_name),
+        );
+
+        // let start_header = HeaderName::from_str("startOffset").unwrap();
+        // let end_header = HeaderName::from_str("endOffset").unwrap();
+
+        let mut headers: HeaderMap = self.0.get_headers().await?;
+        headers.insert(RANGE, format!("bytes={}-{}", start_offset, end_offset).parse()?);
+
+        let resp = self
+            .0
+            .client
+            .get(&url)
+            .headers(headers)
+            .send()
+            .await?;
+        if resp.status() == StatusCode::NOT_FOUND {
+            Err(crate::Error::Other(resp.text().await?))
+        } else {
+            Ok(resp.error_for_status()?.bytes().await?.to_vec())
+        }
     }
 
     /// Obtains a single object with the specified name in the specified bucket.
